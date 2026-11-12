@@ -8,7 +8,7 @@ import { createFocusSlice } from './slices/focus-slice.ts'
 import { createRulesSlice } from './slices/rules-slice.ts'
 import { createViewSlice } from './slices/view-slice.ts'
 import { createWorkSlice } from './slices/work-slice.ts'
-import type { BoundStore, StoreEnvironment, ViewState } from './store-types.ts'
+import { WORK_LIST_VIEWS, type BoundStore, type StoreEnvironment, type ViewState } from './store-types.ts'
 
 enableMapSet()
 // The sample source edits its fixture objects in place (sample-source.ts), and those objects sit in the model.
@@ -21,20 +21,20 @@ export type SliceCreator<Slice> = StateCreator<BoundStore, Mutators, [], Slice>
 /** Bump when a persisted field changes meaning; older saved preferences are then dropped. */
 const PREFERENCES_VERSION = 1
 // The theme is not saved: it follows the system preference (or `?theme=`), as it always has.
-type Preferences = Pick<ViewState, 'listView' | 'filter' | 'sort' | 'focusArtwork'>
+type Preferences = Pick<ViewState, 'listView' | 'filter' | 'focusArtwork'>
 
-const LIST_VIEWS: readonly ViewState['listView'][] = ['cards', 'list', 'agents', 'team']
+/** The Cards and List views became the thread list (2026-11-11); a preference saved for either reads as it. */
+const RETIRED_LIST_VIEWS: readonly unknown[] = ['cards', 'list']
 const FILTERS: readonly ViewState['filter'][] = ['all', 'needs-you', 'working', 'shipped', 'closed']
-const SORTS: readonly ViewState['sort'][] = ['attention', 'started', 'progress']
 const FOCUS_ARTWORK: readonly ViewState['focusArtwork'][] = ['full', 'compact', 'off']
 
 /** Saved preferences are read back field by field; a value this version doesn't know is left at its default. */
 function validPreferences(saved: unknown): Partial<Preferences> {
   const value = (saved ?? {}) as Record<string, unknown>
   const preferences: Partial<Preferences> = {}
-  if (LIST_VIEWS.includes(value.listView as ViewState['listView'])) preferences.listView = value.listView as ViewState['listView']
+  if (WORK_LIST_VIEWS.includes(value.listView as ViewState['listView'])) preferences.listView = value.listView as ViewState['listView']
+  else if (RETIRED_LIST_VIEWS.includes(value.listView)) preferences.listView = 'threads'
   if (FILTERS.includes(value.filter as ViewState['filter'])) preferences.filter = value.filter as ViewState['filter']
-  if (SORTS.includes(value.sort as ViewState['sort'])) preferences.sort = value.sort as ViewState['sort']
   if (FOCUS_ARTWORK.includes(value.focusArtwork as ViewState['focusArtwork'])) preferences.focusArtwork = value.focusArtwork as ViewState['focusArtwork']
   return preferences
 }
@@ -57,11 +57,11 @@ export function createBoundStore(environment: StoreEnvironment) {
         version: PREFERENCES_VERSION,
         ...(environment.storage ? { storage: createJSONStorage(() => environment.storage!) } : {}),
         // Only how the person likes to see My Work is saved. Server records stay in memory.
-        partialize: ({ view: { listView, filter, sort, focusArtwork } }): Preferences => ({ listView, filter, sort, focusArtwork }),
+        partialize: ({ view: { listView, filter, focusArtwork } }): Preferences => ({ listView, filter, focusArtwork }),
         merge: (saved, current) => {
           const view = { ...current.view, ...validPreferences(saved) }
           // The team view needs the team switch, which is not saved.
-          if (view.listView === 'team') view.listView = 'cards'
+          if (view.listView === 'team') view.listView = 'threads'
           return { ...current, view }
         },
       },

@@ -16,12 +16,15 @@ import { Req } from '@/spec/req'
 import { OTHER_FOCUS_AREA_ID, type Request } from '@/data'
 import { useStore, useWorkModel, useWorkspace } from '@/store'
 import { isPlaceableFocusArea, resolveFocusAreaId } from '@/live/to-focus-model'
-import { CHANGED_WHILE_READING_MESSAGE, CHECK_UNDONE_MESSAGE, CHECKED_LOCALLY_MESSAGE, type ReviewResult } from '@/live/review-response'
 import { PRODUCT_ICON } from '@/lib/product-icons'
 import { cn } from '@/lib/utils'
 import { AgentIcon, FocusAreaChip, NextMove, ProductLink, ProgressMeter, StateBadge } from './bits'
 import { FocusChangeBar, useFocusChanges } from './focus-changes'
-import { OpenFollowUps } from './request-card'
+import { OpenFollowUps } from './request-sections'
+import { RequestStages } from './request-stages'
+import { useCheckSave, useSuggestionSave } from './use-request-saves'
+import { chatLinks, requestChat } from '@/live/chat-links'
+import { CopyResumeCommand } from './thread-list'
 import { mergeRequestDetail, requestDetailKey } from '@/live/request-detail-state'
 import { ObsMediaStrip } from './observation-media/ObsMedia'
 import { requestImages } from './observation-media/request-images'
@@ -72,58 +75,17 @@ function keepDrawerOpenForGallery(event: KeyboardEvent) {
   if (event.target instanceof Element && event.target.closest('.obs-media-gallery')) event.preventDefault()
 }
 
-type CheckNotice = { tone: 'saved' | 'problem'; message: string }
-
-/** What the person is told after the worker answers (app.js `saveReview` toasts). */
-function noticeFor(result: ReviewResult, checked: boolean, requestId: string, expectedFingerprint?: string): CheckNotice {
-  switch (result.outcome) {
-    case 'saved': {
-      const latest = result.model.requests.find((request) => request.id === requestId)
-      const review = latest?.review
-      const shared = (result.save?.scope ?? review?.mode) === 'shared'
-      const pending = result.save ? result.save.state === 'queued' : review?.pending
-      if (shared && review?.conflict) return {
-        tone: 'problem', message: `Your review decision was saved here, but your viewers still have conflicting decisions. Read this version and choose again.${pending ? ' The saved decision is waiting to sync.' : ''}`,
-      }
-      if (expectedFingerprint && latest?.contentFingerprint !== expectedFingerprint) return {
-        tone: 'problem', message: `Your review decision was saved for the version you read. The current work changed; review it again.${shared && pending ? ' The saved decision is waiting to sync.' : ''}`,
-      }
-      return { tone: 'saved', message: shared
-        ? `${checked ? 'Checked' : 'Check undone'} for this shared version.${pending ? ' Saved here; waiting to sync to your other viewers.' : ''}`
-        : result.model.sourceKind === 'cloud'
-          ? `${checked ? 'Checked' : 'Check undone'} in your cloud viewer only. My Work sharing is off.`
-          : checked ? CHECKED_LOCALLY_MESSAGE : CHECK_UNDONE_MESSAGE }
-    }
-    case 'changed-while-reading': return { tone: 'problem', message: result.serverMessage ?? CHANGED_WHILE_READING_MESSAGE }
-    case 'refused': return { tone: 'problem', message: result.serverMessage }
-    case 'unavailable': return { tone: 'problem', message: result.serverMessage }
-  }
-}
-
 /**
  * Done, not checked: the one action in the drawer, with undo. Checking saves this version as checked where the
  * work came from and hands it back to you to ship; it never ships it. The worker refuses a version that changed.
  */
-function CheckAction({ request }: { request: Request }) {
+function CheckAction({ request, reading }: { request: Request; reading: boolean }) {
   const { mode } = useWorkspace()
   const { sourceKind, devices } = useWorkModel()
-  const [saving, setSaving] = useState(false)
-  const [notice, setNotice] = useState<CheckNotice | null>(null)
-  // Resolves false when the save did not happen, so the button shows no check; the notice line says why.
-  const save = async (checked: boolean) => {
-    setSaving(true)
-    let next: CheckNotice
-    try {
-      // The version on screen is the one checked; the worker refuses any other.
-      next = noticeFor(await useStore.getState().setRequestChecked(request.id, checked, request.contentFingerprint, request.review?.hash), checked, request.id, request.contentFingerprint)
-    } catch (error) {
-      next = { tone: 'problem', message: error instanceof Error ? error.message : String(error) }
-    } finally {
-      setSaving(false)
-    }
-    setNotice(next)
-    return next.tone !== 'problem'
-  }
+  const check = useCheckSave(request)
+  const { notice, save } = check
+  // While a newer version is being read, the evidence on screen is the older one: nothing is saved against it.
+  const saving = check.saving || reading
   const noticeLine = notice && (
     <p role="status" className={cn('w-full text-xs', notice.tone === 'problem' ? 'font-medium text-foreground' : 'text-muted-foreground')}>{t(notice.message)}</p>
   )
@@ -165,28 +127,9 @@ function CheckAction({ request }: { request: Request }) {
 }
 
 function SuggestionAction({ request }: { request: Request }) {
-  const { sourceKind } = useWorkModel()
-  const [saving, setSaving] = useState(false)
-  const [notice, setNotice] = useState<CheckNotice | null>(null)
   const suggestion = request.suggestion
+  const { saving, notice, save } = useSuggestionSave(suggestion)
   if (!suggestion) return notice ? <p role="status" className="text-sm text-muted-foreground">{notice.message}</p> : null
-  const save = async (action: 'join' | 'not-this') => {
-    setSaving(true)
-    try {
-      const result = await useStore.getState().answerRequestSuggestion(suggestion, action)
-      const shared = result.save?.scope === 'shared'
-      const localCopy = result.save?.localMaterialization === 'pending' ? " This viewer's local work copy is still updating." : ''
-      const conflict = result.model.requests.some((current) => current.suggestion?.conversationKey === suggestion.conversationKey && current.suggestion.sharedConflict)
-      if (conflict) {
-        setNotice({ tone: 'problem', message: `Your decision was saved here, but grouping decisions still conflict. Read this suggestion and choose again.${shared && result.save?.state === 'queued' ? ' The saved decision is waiting to sync.' : ''}${localCopy}` })
-        return
-      }
-      setNotice({ tone: 'saved', message: `${action === 'join' ? 'Joined the request.' : 'Kept these requests separate.'} ${shared
-        ? result.save?.state === 'queued' ? 'Saved here; waiting to sync to your other viewers.' : 'Saved as a shared decision.'
-        : sourceKind === 'cloud' ? 'Saved in your cloud viewer only.' : 'Saved on this machine only.'}${localCopy}` })
-    } catch (error) { setNotice({ tone: 'problem', message: error instanceof Error ? error.message : String(error) }) }
-    finally { setSaving(false) }
-  }
   return <div className="space-y-2 rounded-xl border p-4 text-sm">
     <p>{suggestion.sharedConflict ? 'Your viewers recorded different grouping decisions. Read this suggestion, then choose again to resolve them.' : 'This work may be part of another request.'}</p>
     <p className="font-medium">{suggestion.requestTitle}</p>
@@ -241,7 +184,8 @@ export function RequestDetail({ request, onClose, onOpenFocus }: { request: Requ
     if (!summary || !needsDetail) return
     const controller = new AbortController()
     let active = true
-    setDetail({ key })
+    // A new version of the request on screen (a stage finished) keeps what is shown until it is read.
+    setDetail((shown) => shown?.request?.id === summary.id ? shown : { key })
     void readDetail(summary, { signal: controller.signal }).then(
       (loaded) => { if (active) setDetail({ key, request: loaded }) },
       (error: unknown) => {
@@ -252,9 +196,9 @@ export function RequestDetail({ request, onClose, onOpenFocus }: { request: Requ
     // The detail version changes only when recorded content changes. A new overview object must not restart this read.
   }, [key, needsDetail, readDetail, retry])
   if (!request) return null
-  if (!needsDetail) return <LoadedRequestDetail request={request} onClose={onClose} onOpenFocus={onOpenFocus} />
-  const current = detail?.key === key ? detail : null
-  if (current?.request) return <LoadedRequestDetail request={mergeRequestDetail(request, current.request)} onClose={onClose} onOpenFocus={onOpenFocus} />
+  if (!needsDetail) return <LoadedRequestDetail request={request} reading={false} onClose={onClose} onOpenFocus={onOpenFocus} />
+  const current = detail?.key === key || detail?.request?.id === request.id ? detail : null
+  if (current?.request) return <LoadedRequestDetail request={mergeRequestDetail(request, current.request)} reading={current.key !== key} onClose={onClose} onOpenFocus={onOpenFocus} />
   return (
     <Sheet open onOpenChange={(open) => { if (!open) onClose() }}>
       <SheetContent className="w-full gap-0 overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-xl">
@@ -270,18 +214,21 @@ export function RequestDetail({ request, onClose, onOpenFocus }: { request: Requ
   )
 }
 
-function LoadedRequestDetail({ request, onClose, onOpenFocus }: { request: Request; onClose: () => void; onOpenFocus: (focusAreaId: string) => void }) {
+function LoadedRequestDetail({ request, reading, onClose, onOpenFocus }: { request: Request; reading: boolean; onClose: () => void; onOpenFocus: (focusAreaId: string) => void }) {
   useI18n()
   const title = request.title ?? request.resolvesTo?.title ?? 'Untitled request'
   const recent = request.granular.slice(0, RECENT_RECORDS)
   const earlier = request.granular.slice(RECENT_RECORDS)
   const images = requestImages(request)
+  // The fallback for the row's chat link, which no tool documents.
+  const chat = requestChat(request)
+  const resumeCommand = chat && chatLinks(chat).resumeCommand
   return (
     <Sheet open onOpenChange={(open) => { if (!open) onClose() }}>
       <SheetContent onEscapeKeyDown={keepDrawerOpenForGallery} className="w-full gap-0 overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-xl">
         <Req ids={['R3.6', 'R3.2']}>
           <SheetHeader className="gap-3 border-b p-5 md:p-6">
-            <div className="flex min-w-0 flex-wrap items-center gap-2 pr-10"><StateBadge state={request.state} /><AgentIcon agentId={request.agentId} withDevice /></div>
+            <div className="flex min-w-0 flex-wrap items-center gap-2 pr-10"><StateBadge state={request.state} /><AgentIcon agentId={request.agentId} withDevice />{resumeCommand && <CopyResumeCommand command={resumeCommand} />}</div>
             <SheetTitle className="text-xl leading-snug">{title}</SheetTitle>
             <SheetDescription className="line-clamp-2">{request.summary ?? request.resolvesTo?.summary}</SheetDescription>
             <NextMove next={request.next} className="text-[0.95rem]" />
@@ -289,7 +236,9 @@ function LoadedRequestDetail({ request, onClose, onOpenFocus }: { request: Reque
         </Req>
 
         <div className="space-y-6 p-5 md:p-6">
-          <CheckAction key={request.id} request={request} />
+          {((request.next.who === 'human' && request.next.need === 'review') || !!request.stages?.length) && <RequestStages key={`stage:${request.id}`} request={request} />}
+          {reading && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Spinner className="size-4" />{t('Loading request detail…')}</p>}
+          <CheckAction key={request.id} request={request} reading={reading} />
           <SuggestionAction key={`suggestion:${request.id}`} request={request} />
           <OpenFollowUps request={request} />
 
@@ -299,7 +248,7 @@ function LoadedRequestDetail({ request, onClose, onOpenFocus }: { request: Reque
               <FocusAreaChip focusAreaId={request.focusAreaId} onOpen={onOpenFocus} />
               {/* Sample fixtures change in memory; live requests save as my-focus rows. */}
               <MoveTo request={request} />
-              <span>{interpolate(t('Asked by {name} · started {time} · {duration} · {stage}'), { name: request.askedBy, time: displayTime(request.startedAt), duration: request.runningFor, stage: t(request.stage) })}</span>
+              <Req ids={['R5.2', 'R5.3', 'R5.4', 'R5.5']}><span>{interpolate(t('Asked by {name} · started {time} · {duration} · {stage}'), { name: request.askedBy, time: displayTime(request.startedAt), duration: request.runningFor, stage: t(request.stage) })}</span></Req>
             </div>
           </div>
 

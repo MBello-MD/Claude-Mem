@@ -1,11 +1,14 @@
 // The wireframe fixtures as a data source, for design review (`?source=sample`). Nothing here is real.
-import { assertConsistentRequest, OTHER_FOCUS_AREA_ID, SAMPLE_AGENTS, SAMPLE_DEVICES, SAMPLE_PEOPLE, SAMPLE_REQUESTS, SAMPLE_RUNS, type FocusArea, type FocusChange, type Request } from '../data.ts'
+import { assertConsistentRequest, OTHER_FOCUS_AREA_ID, SAMPLE_AGENTS, SAMPLE_DEVICES, SAMPLE_PEOPLE, SAMPLE_REQUESTS, SAMPLE_RUNS, type FocusArea, type FocusChange, type FocusPlan, type PlanProposal, type Request, type RequestStage, type StageFormatInfo } from '../data.ts'
 import { SAMPLE_CURRENT_PERIOD, SAMPLE_FOCUS_AREAS, SAMPLE_OTHER_ASKS, SAMPLE_PAST_PERIODS } from '../data-goals.ts'
 import { SAMPLE_OWNER_RULES, SAMPLE_RULE_SCOPES, SAMPLE_RULES_LEARNING, type OwnerRule, type RuleChange, type RuleScope } from '../data-rules.ts'
 import { getConnectionStatus } from './connection-status.ts'
 import { byFocusPriority } from './to-focus-model.ts'
+import { requestChat } from './chat-links.ts'
+import { focusPlanSummary } from './owner-runs-model.ts'
 import { navWordIn } from '../../../../services/work-view/nav-words.mjs'
-import type { WorkDataSource, WorkModel } from './work-data-source.ts'
+import { MAX_FOCUS_NOTES_CHARS } from '../../../../services/work-view/work-state-limits.mjs'
+import type { OwnerRunStart, WorkDataSource, WorkModel } from './work-data-source.ts'
 
 /** Each checked sample request as it was before its check, so Undo restores it exactly. In memory only. */
 const sampleRequestsBeforeCheck = new Map<string, Request>()
@@ -56,10 +59,11 @@ const MAX_AREA_GOAL_CHARS = 300
  * The same change the worker saves, applied to the sample areas (WorkViewRoutes `saveFocus`), with the worker's
  * refusals word for word. A body the worker's schema would refuse answers its "ValidationError".
  */
-function applySampleFocusChange({ action, focusAreaId, name, goal, intoFocusAreaId, focusAreaIds, requestId }: FocusChange) {
+function applySampleFocusChange({ action, focusAreaId, name, goal, notes, intoFocusAreaId, focusAreaIds, requestId }: FocusChange) {
   const trimmedName = name?.trim(), trimmedGoal = goal?.trim()
   if (trimmedName !== undefined && (!trimmedName || trimmedName.length > MAX_AREA_NAME_CHARS)) throw new Error('ValidationError')
   if (trimmedGoal !== undefined && (!trimmedGoal || trimmedGoal.length > MAX_AREA_GOAL_CHARS)) throw new Error('ValidationError')
+  if (notes !== undefined && notes.trim().length > MAX_FOCUS_NOTES_CHARS) throw new Error('ValidationError')
   const byId = new Map(sampleFocusAreas.map((area) => [area.id, area]))
   const replace = (id: string, change: Partial<FocusArea>) => { sampleFocusAreas = sampleFocusAreas.map((area) => area.id === id ? { ...area, ...change } : area).sort(byFocusPriority) }
   const stillInFocus = (area: FocusArea | undefined) => !!area && area.status !== 'dismissed' && !area.mergedInto
@@ -98,6 +102,9 @@ function applySampleFocusChange({ action, focusAreaId, name, goal, intoFocusArea
   } else if (action === 'edit-goal') {
     if (!trimmedGoal) throw new Error('Write the goal before saving it.')
     replace(area.id, { goal: trimmedGoal })
+  } else if (action === 'edit-notes') {
+    if (notes === undefined) throw new Error('Send the notes to save; empty notes clear them.')
+    replace(area.id, { notes: notes.trim() || null })
   } else if (action === 'merge') {
     if (!intoFocusAreaId) throw new Error('Choose the area to merge it into.')
     if (intoFocusAreaId === area.id) throw new Error('An area cannot be merged into itself.')
@@ -111,6 +118,55 @@ function applySampleFocusChange({ action, focusAreaId, name, goal, intoFocusArea
   } else {
     throw new Error(`Unknown focus change: ${String(action)}`)
   }
+}
+
+/** The worker's built-in stage formats (stage-formats.ts), restated for the fixtures; the live list is the worker's. */
+const SAMPLE_STAGE_FORMATS: StageFormatInfo[] = [
+  { id: 'brief', label: 'Brief', output: 'markdown', builtIn: true }, { id: 'one-pager', label: 'One-pager', output: 'markdown', builtIn: true },
+  { id: 'deck', label: 'Deck', output: 'html', builtIn: true }, { id: 'technical', label: 'Technical walkthrough', output: 'markdown', builtIn: true },
+]
+/** The tools the worker can send an answer to (answer-delivery.ts). */
+const SAMPLE_ANSWER_TOOLS = ['claude', 'codex']
+
+/** One-click runs as played this session: what the sample "worker" has started, in memory only. Nothing here calls an agent. */
+let sampleAutoStageFormat: string | null = null
+let samplePlan: FocusPlan | null = null
+/** Clicks the sample has seen: one starts nothing again, as the worker's token check does. */
+const sampleClicks = new Set<string>()
+let sampleRunMs = 1500
+/** How long a sample run "takes" before its result shows. Tests shorten it. */
+export const setSampleRunDelay = (ms: number) => { sampleRunMs = ms }
+let publishSampleModel: ((model: WorkModel) => void) | null = null
+const publishSample = async () => publishSampleModel?.(await loadSampleWorkModel())
+const sampleNow = () => new Date().toISOString()
+
+function changeSampleRequest(requestId: string, change: (request: Request) => Request) {
+  const index = SAMPLE_REQUESTS.findIndex((request) => request.id === requestId)
+  if (index < 0) throw new Error('That request is not in your work.')
+  SAMPLE_REQUESTS[index] = change(SAMPLE_REQUESTS[index])
+}
+
+function withSampleStage(request: Request, stage: RequestStage): Request {
+  const stages = [stage, ...(request.stages ?? []).filter((entry) => entry.formatId !== stage.formatId)]
+  const readyStages = stages.filter((entry) => entry.state === 'ready').map((entry) => entry.formatId)
+  const { readyStages: _ready, ...rest } = request
+  return { ...rest, stages, ...(readyStages.length ? { readyStages } : {}) }
+}
+
+/** The proposals a plan would hold for the sample areas: each one something an existing focus action could save. */
+function samplePlanProposals(focusAreaId: string | null): PlanProposal[] {
+  const kept = sampleFocusAreas.filter((area) => area.status === 'kept' && !area.mergedInto)
+  const planned = focusAreaId === null ? kept : kept.filter((area) => area.id === focusAreaId)
+  const proposals: PlanProposal[] = []
+  if (focusAreaId === null && kept.length > 1) {
+    proposals.push({ kind: 'reorder', focusAreaIds: [kept[1].id, kept[0].id, ...kept.slice(2).map((area) => area.id)], moves: [{ focusAreaId: kept[1].id, reason: 'A finished request there waits for your review.' }] })
+  }
+  for (const area of planned.slice(0, 2)) {
+    proposals.push({ kind: 'goal', focusAreaId: area.id, goal: `Everything in ${area.name} can be checked from My Work.`, reason: 'The current goal names the work, not what done looks like.' })
+    if (!area.notes && area.quotes[0]) proposals.push({ kind: 'notes', focusAreaId: area.id, notes: `Why it matters: you keep coming back to ${area.name}.`, draft: true, quotes: [area.quotes[0].quote] })
+    proposals.push({ kind: 'next-asks', focusAreaId: area.id, asks: [{ text: `List what is still open in ${area.name}.`, reason: 'Two requests have no recorded next step.' }] })
+  }
+  return proposals
 }
 
 const loadSampleWorkModel = async (): Promise<WorkModel> => ({
@@ -141,6 +197,9 @@ const loadSampleWorkModel = async (): Promise<WorkModel> => ({
     progress: { label: SAMPLE_RUNS.progress.label, lastRunAt: SAMPLE_RUNS.progress.lastRunAt, deviceName: sampleDeviceName(SAMPLE_RUNS.progress.deviceId) },
   },
   refresh: null,
+  stageFormats: SAMPLE_STAGE_FORMATS,
+  autoStageFormat: sampleAutoStageFormat,
+  focusPlan: samplePlan ? focusPlanSummary(samplePlan) : null,
   sourceHealth: { connected: true, error: null },
   // Sample mode demonstrates the indicator (LiveIndicator labels it a demonstration); nothing streams.
   connection: getConnectionStatus({ now: 0 }),
@@ -149,8 +208,11 @@ const loadSampleWorkModel = async (): Promise<WorkModel> => ({
 export const sampleSource: WorkDataSource = {
   sourceKind: 'sample',
   loadWorkModel: loadSampleWorkModel,
-  // The sample demo flip (playDemoUpdates) stands in for live updates; there is no feed to subscribe to.
-  subscribeToLiveUpdates: () => () => {},
+  // There is no feed. The sample's own one-click runs publish their result through this, as the worker's feed would.
+  subscribeToLiveUpdates: (onWorkModel) => {
+    publishSampleModel = onWorkModel
+    return () => { if (publishSampleModel === onWorkModel) publishSampleModel = null }
+  },
 
   async saveRuleChange(change) {
     applySampleRuleChange(change)
@@ -166,6 +228,57 @@ export const sampleSource: WorkDataSource = {
   // Sample agents are fixtures with no recorded state to change.
   markAgentFinished: () => Promise.reject(new Error('Sample agents have no recorded state to change.')),
 
+  /** Plays an answer's delivery: on its way, then taken by the session's tool. A tool the worker cannot resume refuses, as it does live. */
+  async answerRequest(requestId, _text, token): Promise<OwnerRunStart> {
+    const request = SAMPLE_REQUESTS.find((entry) => entry.id === requestId)
+    if (!request) throw new Error('Sending your answer could not start: That request is not in your work.')
+    if (sampleClicks.has(token)) return { outcome: 'duplicate' }
+    const platform = requestChat(request)?.platform
+    if (!platform || !SAMPLE_ANSWER_TOOLS.includes(platform)) return { outcome: 'refused', reason: 'Answers can be sent to Claude Code and Codex sessions only. Open the chat to answer this one.' }
+    if (request.answer?.state === 'answering') throw new Error('Sending your answer could not start: Your last answer to this request is still being delivered.')
+    sampleClicks.add(token)
+    changeSampleRequest(requestId, (entry) => ({ ...entry, answer: { state: 'answering' } }))
+    setTimeout(() => { changeSampleRequest(requestId, (entry) => ({ ...entry, answer: { state: 'delivered' } })); void publishSample() }, sampleRunMs)
+    void publishSample()
+    return { outcome: 'started' }
+  },
+
+  /** Plays one stage being made: generating, then ready with a sample link. */
+  async generateStage(requestId, formatId, token): Promise<OwnerRunStart> {
+    const request = SAMPLE_REQUESTS.find((entry) => entry.id === requestId)
+    if (!request) throw new Error('The stage could not start: That request is not in your work.')
+    if (sampleClicks.has(token)) return { outcome: 'duplicate' }
+    if (!SAMPLE_STAGE_FORMATS.some((format) => format.id === formatId)) throw new Error('The stage could not start: That stage format does not exist.')
+    if (request.stages?.some((stage) => stage.formatId === formatId && stage.state === 'generating')) throw new Error('The stage could not start: This stage is already being made.')
+    sampleClicks.add(token)
+    const stage: RequestStage = { formatId, state: 'generating', startedAt: sampleNow(), generatedAt: null, reviewedThrough: null, error: null, trigger: 'owner' }
+    changeSampleRequest(requestId, (entry) => withSampleStage(entry, stage))
+    setTimeout(() => { changeSampleRequest(requestId, (entry) => withSampleStage(entry, { ...stage, state: 'ready', href: '#', generatedAt: sampleNow() })); void publishSample() }, sampleRunMs)
+    void publishSample()
+    return { outcome: 'started' }
+  },
+
+  /** Off until chosen; choosing a format makes nothing by itself. */
+  async setAutoStageFormat(formatId) {
+    if (formatId !== null && !SAMPLE_STAGE_FORMATS.some((format) => format.id === formatId)) throw new Error('The automatic stage setting was not saved: That stage format does not exist.')
+    sampleAutoStageFormat = formatId
+    return loadSampleWorkModel()
+  },
+
+  /** Plays planning help: planning, then ready with proposals for the sample areas. Nothing is applied. */
+  async planFocus(focusAreaId, token): Promise<OwnerRunStart> {
+    if (sampleClicks.has(token)) return { outcome: 'duplicate' }
+    if (focusAreaId !== null && !sampleFocusAreas.some((area) => area.id === focusAreaId)) throw new Error('Planning help could not start: That focus area is not in your focus areas.')
+    if (samplePlan?.state === 'planning') throw new Error('Planning help could not start: A plan is already being made.')
+    sampleClicks.add(token)
+    const planning: FocusPlan = { state: 'planning', focusAreaId, startedAt: sampleNow(), generatedAt: null, error: null, proposals: [], skipped: [] }
+    samplePlan = planning
+    setTimeout(() => { samplePlan = { ...planning, state: 'ready', generatedAt: sampleNow(), proposals: samplePlanProposals(focusAreaId) }; void publishSample() }, sampleRunMs)
+    void publishSample()
+    return { outcome: 'started' }
+  },
+  loadFocusPlan: async () => samplePlan,
+
   /** Checking hands the request back to you to ship; it never marks it shipped. Fixtures have no fingerprint to guard. */
   async setRequestChecked(requestId, _expectedFingerprint, checked) {
     const index = SAMPLE_REQUESTS.findIndex((request) => request.id === requestId)
@@ -174,7 +287,7 @@ export const sampleSource: WorkDataSource = {
     if (checked) {
       const request = SAMPLE_REQUESTS[index]
       sampleRequestsBeforeCheck.set(requestId, request)
-      SAMPLE_REQUESTS[index] = assertConsistentRequest({ ...request, state: 'your-move', checkedAt: 'just now', next: { who: 'human', text: 'Ship it' } })
+      SAMPLE_REQUESTS[index] = assertConsistentRequest({ ...request, state: 'your-move', checkedAt: 'just now', next: { who: 'human', need: 'approval', text: 'Ship it' } })
     } else {
       const requestBeforeCheck = sampleRequestsBeforeCheck.get(requestId)
       if (!requestBeforeCheck) throw new Error(`Sample request ${requestId} has no check to undo`)

@@ -2,7 +2,7 @@
 // here; live requests change only through their data source, never in the browser.
 import { SAMPLE_REQUESTS, SaveRefusedError, assertConsistentRequest, type Request } from '../../data.ts'
 import { freshlyUpdatedRequestIds, mergeRecentChanges, requestChanges } from '../../live/update-queue.ts'
-import type { WorkDataSource, WorkModel } from '../../live/work-data-source.ts'
+import type { OwnerRunStart, WorkDataSource, WorkModel } from '../../live/work-data-source.ts'
 import type { SliceCreator } from '../create-store.ts'
 import type { WorkSlice } from '../store-types.ts'
 
@@ -20,6 +20,43 @@ export const createWorkSlice: SliceCreator<WorkSlice> = (set, get) => {
   /** Counts shown models, so a read can tell a newer live model arrived while it was in flight. */
   let modelsShown = 0
   let freshTimer: ReturnType<typeof setTimeout> | undefined
+
+  /** Clicks whose start is still on its way to the worker, so a double click sends one. */
+  const ownerRunsStarting = new Set<string>()
+  const clickToken = () => globalThis.crypto.randomUUID()
+
+  /** Sends one click to the source: at most one request per `key` at a time, each with its own token. */
+  const startOwnerRun = async (key: string, what: string, start: (source: WorkDataSource, token: string) => Promise<OwnerRunStart> | undefined): Promise<OwnerRunStart> => {
+    const startOn = activeSource(what)
+    if (ownerRunsStarting.has(key)) return { outcome: 'duplicate' }
+    ownerRunsStarting.add(key)
+    try {
+      const started = start(startOn, clickToken())
+      if (!started) return { outcome: 'refused', reason: 'This viewer cannot do that here.' }
+      return await started
+    } finally { ownerRunsStarting.delete(key) }
+  }
+
+  /** Keeps `work.focusPlan` on the plan the model says is ready: read once per plan, dropped when the model has none ready. */
+  let planReading: string | null = null
+  const followFocusPlan = (model: WorkModel) => {
+    const summary = model.focusPlan
+    const readyAt = summary?.state === 'ready' ? summary.generatedAt : null
+    const shown = get().work.focusPlan
+    if (!readyAt) { if (shown) set((state) => { state.work.focusPlan = null }); return }
+    if (shown?.generatedAt === readyAt || planReading === readyAt || !source?.loadFocusPlan) return
+    planReading = readyAt
+    const thisSession = session
+    void source.loadFocusPlan().then((plan) => {
+      if (session !== thisSession || plan?.state !== 'ready') return
+      // The model can move on while the plan is read: only the plan it names as ready now is shown.
+      const load = get().work.load
+      const current = load.state === 'loaded' ? load.model.focusPlan : null
+      if (current?.state !== 'ready' || current.generatedAt !== plan.generatedAt) return
+      set((state) => { state.work.focusPlan = plan })
+    }).catch(() => { /* The summary still shows the plan is ready; the next model tries the read again. */ })
+      .finally(() => { if (planReading === readyAt) planReading = null })
+  }
 
   const showModel = (model: WorkModel) => {
     const previous = get().work.load
@@ -42,6 +79,7 @@ export const createWorkSlice: SliceCreator<WorkSlice> = (set, get) => {
       freshTimer = setTimeout(() => set((state) => { state.work.freshlyUpdatedIds = new Set() }), FRESHLY_UPDATED_FOR_MS)
     }
     get().reconcileOpenRequest()
+    followFocusPlan(model)
   }
 
   const activeSource = (what: string) => {
@@ -104,7 +142,7 @@ export const createWorkSlice: SliceCreator<WorkSlice> = (set, get) => {
   }
 
   return {
-    work: { load: { state: 'loading' }, connection: null, freshlyUpdatedIds: new Set(), recentChanges: [], sourceKind: null, refreshError: null },
+    work: { load: { state: 'loading' }, connection: null, freshlyUpdatedIds: new Set(), recentChanges: [], sourceKind: null, refreshError: null, focusPlan: null },
 
     startWorkSource: (nextSource) => {
       const thisSession = ++session
@@ -165,6 +203,19 @@ export const createWorkSlice: SliceCreator<WorkSlice> = (set, get) => {
 
     refreshWork: () => activeSource('start a refresh on').refreshWork(),
 
+    answerRequest: (requestId, text) => startOwnerRun(`answer:${requestId}`, 'send the answer through', (to, token) => to.answerRequest?.(requestId, text, token)),
+
+    generateStage: (requestId, formatId) => startOwnerRun(`stage:${requestId}:${formatId}`, 'make the stage on', (to, token) => to.generateStage?.(requestId, formatId, token)),
+
+    setAutoStageFormat: async (formatId) => {
+      await saving('save the automatic stage setting to', (to) => {
+        if (!to.setAutoStageFormat) throw new Error('Automatic stages are unavailable in this viewer.')
+        return to.setAutoStageFormat(formatId)
+      }, (model) => model)
+    },
+
+    planFocus: (focusAreaId) => startOwnerRun('plan', 'plan focus areas on', (to, token) => to.planFocus?.(focusAreaId, token)),
+
     updateSampleRequest: (id, change) => {
       const load = get().work.load
       if (load.state !== 'loaded') throw new Error(`Sample request ${id} changed before the work model loaded`)
@@ -185,11 +236,11 @@ export const createWorkSlice: SliceCreator<WorkSlice> = (set, get) => {
         state: 'needs-check', stage: 'Reviewing',
         progress: { ...request.progress, percent: 100, readings: 4, reviewedAt: '2:04 pm', history: [30, 55, 70, 100] },
         estimate: null,
-        next: { who: 'human', text: 'Check the wireframe against the spec' },
+        next: { who: 'human', need: 'review', text: 'Check the wireframe against the spec' },
         workstreams: request.workstreams.map((stream) => ({ ...stream, tasks: stream.tasks.map((task) => ({ ...task, done: true })) })),
         granular: [{ kind: 'work', text: 'Wireframe: My Rules screens done', at: '2:03 pm' }, ...request.granular],
         story: request.story.map((step) => ({ ...step, status: 'complete' })),
-        activityWord: '',
+       
       })), SAMPLE_DEMO_FLIP_AFTER_MS)
       return () => clearTimeout(timer)
     },

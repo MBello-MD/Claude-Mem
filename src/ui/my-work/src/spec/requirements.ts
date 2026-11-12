@@ -29,17 +29,17 @@ export const REQUIREMENTS: Requirement[] = [
   // 3. Layers and progressive disclosure
   { id: 'R3.1', section: '3', kind: 'retired', text: 'Retired 2026-10-27 (My Focus): the layer order is now focus areas (with Other), then requests, then request detail, then granular records. Replaced by R16.1 and R16.2.' },
   { id: 'R3.2', section: '3', kind: 'ui', text: 'Overall request: progress meter, dates, completion and the build story behind it.' },
-  { id: 'R3.3', section: '3', kind: 'ui', text: 'My Work is the live inbox of request cards.' },
+  { id: 'R3.3', section: '3', kind: 'ui', text: 'My Work is the live inbox of requests.' },
   { id: 'R3.4', section: '3', kind: 'ui', text: 'Request detail has sub-cards for the workstreams under one request.' },
   { id: 'R3.5', section: '3', kind: 'ui', text: 'Granular records are a small truncated list of work-state updates and observations together, secondary, rolling in live.' },
   { id: 'R3.6', section: '3', kind: 'ui', text: 'Detail pages stay simple.' },
   { id: 'R3.7', section: '3', kind: 'retired', text: 'Retired 2026-10-27 (My Focus): the goals page is gone; focus areas sit in the MY FOCUS rail above the pages. Replaced by R16.1.' },
 
   // 4. Views
-  { id: 'R4.1', section: '4', kind: 'ui', text: 'Cards view: portrait request cards.' },
-  { id: 'R4.2', section: '4', kind: 'ui', text: 'List view with sorting.' },
+  { id: 'R4.1', section: '4', kind: 'retired', text: 'Retired 2026-11-11 (thread list): the portrait request cards are gone; My Work is one plain row per request. Replaced by R19.1.' },
+  { id: 'R4.2', section: '4', kind: 'retired', text: 'Retired 2026-11-11 (thread list): the sortable table is gone; rows keep one order, what waits on a person first, under their focus areas. Replaced by R19.1.' },
   { id: 'R4.3', section: '4', kind: 'ui', text: 'By agent view: a card per agent with its icon and what it is working on, an outer view to the list.' },
-  { id: 'R4.4', section: '4, 15.2', kind: 'ui', text: 'Status board merged into List: each status is a line of split-flap tiles, as wide as its label, that flips when the status changes, like a train departures board.' },
+  { id: 'R4.4', section: '4, 15.2', kind: 'retired', text: 'Retired 2026-11-11 (thread list): the split-flap status board went with the List view; a row says who it waits on in words. Replaced by R19.3.' },
   { id: 'R4.5', section: '4', kind: 'retired', text: 'Retired 2026-10-27 (My Focus): the month-by-month report moved to Past focus. Replaced by R16.7.' },
   { id: 'R4.6', section: '4', kind: 'ui', text: 'My Rules page: how I like to work, as if-then blocks.' },
 
@@ -67,11 +67,11 @@ export const REQUIREMENTS: Requirement[] = [
   { id: 'R7.1', section: '7', kind: 'ui', text: 'Performance and shipping velocity, in human terms, not a raw index.' },
   { id: 'R7.2', section: '7', kind: 'ui', text: 'A real narrative of the build story.' },
   { id: 'R7.3', section: '7', kind: 'ui', text: 'Preferences extracted for how I like to work feed self-learning (My Rules).' },
-  { id: 'R7.4', section: '7', kind: 'ui', text: 'Daily recap with milestone images or one hero image.' },
+  { id: 'R7.4', section: '7', kind: 'retired', text: 'Retired 2026-11-11 (thread list): the recap panel with its hero image left My Work; the build story opens from one link.' },
 
   // 8. Where it lives
   { id: 'R8.1', section: '8', kind: 'ui', text: 'Replaces the localhost:377** viewer; fully local and live.' },
-  { id: 'R8.2', section: '8', kind: 'ui', text: 'Connect Claude.ai / Connect ChatGPT CTAs as the cloud sync funnel entry point.' },
+  { id: 'R8.2', section: '8', kind: 'retired', text: 'Retired 2026-11-11 (thread list): the Connect Claude.ai / Connect ChatGPT prompts lived in the recap panel, which left My Work.' },
   { id: 'R8.3', section: '8', kind: 'process', text: 'Ships as the flagship claude-mem 14.0.0+ open-source release.' },
   { id: 'R8.4', section: '8', kind: 'backend', text: 'PostHog telemetry on how agents adhere to work state.' },
 
@@ -126,7 +126,7 @@ export const REQUIREMENTS: Requirement[] = [
 
   // 15. Decisions
   { id: 'D1', section: '15.1', kind: 'retired', text: 'Retired 2026-10-27 (My Focus): the combined-progress rule (reviewed requests only) now applies to the area header, and the card chip names the area, Other, or Sorting…. Replaced by R16.2 and R16.5.' },
-  { id: 'D5', section: '15.5', kind: 'ui', text: 'Agent-only card shows terminal lines, a corner spinner with a one-word hover, then transforms to human text (any transform effect); static under reduced motion.' },
+  { id: 'D5', section: '15.5', kind: 'retired', text: 'Retired 2026-11-11 (thread list): the agent-only card with terminal lines and a spinner is gone; an untitled request is a row that says its title is being written. Replaced by R19.1.' },
   { id: 'D6', section: '15.6', kind: 'process', text: 'Each Refresh shows its last run cost; My Rules shows the week’s title cost.', wireframe: 'Owner dropped generation-cost display on Oct 20, 2026: the spend is tiny next to the value. Not shown in the GUI.' },
   { id: 'D7', section: '15.7', kind: 'ui', text: 'Approved rules are written to ~/.claude-mem/MY-RULES.md and loaded with user-level instructions; never project files; approved only.' },
 
@@ -135,13 +135,13 @@ export const REQUIREMENTS: Requirement[] = [
   { id: 'R3.9', section: '3', kind: 'retired', text: 'Retired 2026-10-27 (My Focus): request progress rolls up into its focus area header; goals are one sentence on an area. Replaced by R16.2.' },
 
   // 16. My Focus (added 2026-10-27, append only): focus areas are the top level of My Work.
-  { id: 'R16.1', section: '16', kind: 'ui', text: 'The MY FOCUS rail sits above the pages: kept focus areas in priority order (the owner\'s order wins over the suggested one), each with how many requests in it need me, then Other, then "N suggested", then My Work and My Rules. Selecting an area filters My Work to it. On phones and the icon-only rail the same entries are a chip row above the cards.' },
+  { id: 'R16.1', section: '16', kind: 'retired', text: 'Retired 2026-11-11 (focus-first board): the MY FOCUS rail and the phone chip row are gone; the focus list is the page itself and the other pages are links in the header. Replaced by R19.9 and R19.11.' },
   { id: 'R16.2', section: '16', kind: 'ui', text: 'The area header: its goal sentence, combined progress of its reviewed requests (unreviewed ones named, not counted), what shipped, asks with no work yet as Not started rows with how often I asked and my quotes, and a menu to Rename, Edit goal, Merge into…, reorder and mark Done.' },
   { id: 'R16.3', section: '16', kind: 'ui', text: 'Other is a permanent bucket for requests that fit no area, with its own header; it is never an area.' },
   { id: 'R16.4', section: '16', kind: 'ui', text: 'Suggested areas wait in a decision queue with Keep, Rename, Merge and Dismiss; each decision can be undone, and a refresh never overrides it.' },
   { id: 'R16.5', section: '16', kind: 'ui', text: 'Each request shows its area chip: the area\'s name, Other, or "Sorting…" until a refresh places it.' },
   { id: 'R16.6', section: '16', kind: 'ui', text: 'Move to… on a request puts it in another area or Other; my move wins over any later automatic placement.' },
-  { id: 'R16.7', section: '16', kind: 'ui', text: 'Past focus, linked from the bottom of the rail, holds areas marked done and what I asked for most, month by month.' },
+  { id: 'R16.7', section: '16', kind: 'ui', text: 'Past focus, linked from the header, holds areas marked done and what I asked for most, month by month.' },
 
   // 17. Shared focus page (added 2026-10-29, append only): share a focus area as a page people and agents comment on.
   { id: 'R17.1', section: '17', kind: 'ui', text: 'Share a focus area as a page by link (cmem.ai/focus/…), from the area menu; the area shows that it is shared.' },
@@ -151,7 +151,25 @@ export const REQUIREMENTS: Requirement[] = [
   { id: 'R17.5', section: '17', kind: 'backend', text: 'The shared page carries display text only: no prompts, quotes, transcripts, evidence links, files or machine names.', wireframe: 'to-shared-focus.ts builds the page; cmem.ai keeps only the shared shape (claude-mem-pro src/lib/focus-share/snapshot.ts).' },
 
   // 18. Account (added 2026-11-05, append only): the cloud viewer is where viewer accounts land, so billing is reachable from it.
-  { id: 'R18.1', section: '18', kind: 'ui', text: 'On the cloud viewer only, the bottom of the rail links "Account & billing" to cmem.ai/account. My Work served from this computer shows no such link.' },
+  { id: 'R18.1', section: '18', kind: 'ui', text: 'On the cloud viewer only, the header links "Account & billing" to cmem.ai/account. My Work served from this computer shows no such link.' },
+
+  // 19. Thread list (added 2026-11-11, append only): My Work reads as a plain list of threads, not cards.
+  { id: 'R19.1', section: '19', kind: 'ui', text: 'My Work is a vertical list of threads, one plain row per request with hairline dividers and no card chrome, under one-line focus area headings (name and count) in priority order, then Other, then not sorted yet. Inside one area there are no headings. What waits on a person comes first, newest first.' },
+  { id: 'R19.2', section: '19', kind: 'ui', text: 'Each thread links to its chat: the transcript opens in a new tab, and where the tool has a documented resume command (Claude Code) it can be copied. No link or command is invented.' },
+  { id: 'R19.3', section: '19', kind: 'ui', text: 'Each thread always shows its next step and who it waits on: the agent by name, or a person with what it needs from them (answer, review or approval). In team mode a move on a request someone else asked for names that person.' },
+  { id: 'R19.4', section: '19', kind: 'ui', text: 'A person makes their move from the row: Mark checked for a review, Join or Not this for a grouping approval, otherwise Open chat. Nothing pretends to deliver a reply into an agent session.' },
+  { id: 'R19.5', section: '19', kind: 'ui', text: 'Each thread carries a risk color from green to red with the reason as its text alternative, from the last memory review, as the tint of the whole row; an unrated request has no tint, never a guessed level. The dot on the row is the state of the request.' },
+  { id: 'R19.6', section: '19', kind: 'ui', text: 'Request, next step and why sit in aligned columns that wrap, under the focus area, so each thread reads as what was asked, what happens next and which goal or principle of the owner it serves. The why never restates the request, and is empty until a review records one.' },
+  { id: 'R19.7', section: '19', kind: 'ui', text: 'Stage: a thread waiting for review shows what the agent made in its own column, a readable brief beside the real thing (its screenshots, its first deliverable), and opens the request where it can be staged in another format. Once a stage is ready, the column names it.' },
+  { id: 'R19.8', section: '19', kind: 'ui', text: 'A thread waiting for an answer shows the question, takes the answer on the row, and holds what the person may need to know to answer it one click away.' },
+  { id: 'R19.9', section: '19', kind: 'ui', text: 'The first view is the focus list in the order the owner set, across the whole page: each focus is one line with its name (the goal is its hover text) and how many chats it holds in each state, opens onto its threads in place, and moves up or down.' },
+  { id: 'R19.10', section: '19', kind: 'ui', text: 'Board is a second view of the same threads, switched beside Threads: columns for what a person must do next (Answer, Review, Approve), then Working, Idle and Shipped. Every request that is not closed is in exactly one column. A card shows the status dot, the title, the next step, the focus and the chat link, tinted by risk. Idle and Shipped show their newest five until asked for all. Nothing drags.' },
+  { id: 'R19.11', section: '19', kind: 'ui', text: 'With no side panel, the header carries plain text links to My Focus, My Rules, Suggested (while areas wait for a decision), Past focus and, on the cloud viewer, Account & billing. On phones and narrow windows the same links sit on one line above the page.' },
+  { id: 'R19.12', section: '19', kind: 'ui', text: 'Send hands the answer to the request’s own agent session, and the row says how that went: sending, delivered, or not delivered with the reason. A session it cannot be sent to says why, and the answer is copied with a link to the chat.' },
+  { id: 'R19.13', section: '19', kind: 'ui', text: 'The request lists every stage format with where its stage stands (being made, ready, failed with the reason). A ready stage opens; a format with no stage, or a failed one, has Generate, and one click is one run.' },
+  { id: 'R19.14', section: '19', kind: 'ui', text: 'Staging every finished review automatically is off until the owner picks a format for it, and says it runs the agent once per finished review.' },
+  { id: 'R19.15', section: '19', kind: 'ui', text: 'A focus carries the owner’s notes on why it matters, on the opened focus line and the focus page: plain text, edited in place (2,000 characters), saved with Undo. A focus with no notes shows only a quiet button to add them.' },
+  { id: 'R19.16', section: '19', kind: 'ui', text: 'Planning help for all focuses or one: a button starts it and says where it stands. A ready plan lists its suggestions by kind with their reasoning; Accept saves one as the owner’s own focus change, Dismiss hides it, a next ask is copied, and nothing is applied without a click.' },
 ]
 
 export const REQUIREMENTS_BY_ID = new Map(REQUIREMENTS.map((requirement) => [requirement.id, requirement]))

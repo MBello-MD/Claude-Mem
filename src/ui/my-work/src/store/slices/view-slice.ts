@@ -63,9 +63,8 @@ export const createViewSlice = (environment: StoreEnvironment): SliceCreator<Vie
       workspace: { mode: 'home', team: false, connected: false },
       showSpec: false,
       dark: route.theme ?? environment.prefersDark,
-      listView: 'cards',
+      listView: 'threads',
       filter: 'all',
-      sort: 'attention',
       focusArtwork: 'full',
     },
 
@@ -140,7 +139,6 @@ export const createViewSlice = (environment: StoreEnvironment): SliceCreator<Vie
     setDark: (dark) => set((state) => { state.view.dark = dark }),
     setListView: (listView) => set((state) => { state.view.listView = listView }),
     setFilter: (filter) => set((state) => { state.view.filter = filter }),
-    setSort: (sort) => set((state) => { state.view.sort = sort }),
     setFocusArtwork: (focusArtwork) => set((state) => { state.view.focusArtwork = focusArtwork }),
   }
 }
