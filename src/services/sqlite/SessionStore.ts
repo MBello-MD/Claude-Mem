@@ -5125,7 +5125,13 @@ export class SessionStore {
   }
 
   close(): void {
-    this.db.close();
+    // bun keeps a prepared statement — and with it the connection, its WAL index mapping and the
+    // database file — alive until the statement is finalized or collected, so a plain `db.close()`
+    // releases nothing while this store still holds its cache. close(true) finalizes every
+    // outstanding statement and releases the connection now, which Windows needs before the file or
+    // its directory can be renamed or removed.
+    this.statementCache.clear();
+    this.db.close(true);
   }
 
   /**
