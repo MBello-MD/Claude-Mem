@@ -21,6 +21,7 @@ import { FocusArtwork } from './focus-artwork'
 import { formatPromptDay, formatPromptTime, promptDayKey, shipDayKey } from '@/lib/prompt-time'
 import { navWordIn } from '../../../../services/work-view/nav-words.mjs'
 import { AreaEditDialog, type AreaEdit, type FocusChanges } from './focus-changes'
+import { FocusNotes } from './focus-notes'
 import { SharedMark, ShareFocusDialog } from './share-focus'
 import { canShareArea } from '@/live/to-shared-focus'
 
@@ -167,7 +168,7 @@ function NotStartedAsks({ asks }: { asks: FocusAsk[] }) {
 function AreaMenu({ area, changes, onEdit, onShare }: { area: FocusArea; changes: FocusChanges; onEdit: (edit: AreaEdit) => void; onShare: () => void }) {
   const { t } = useI18n()
   const { focusAreas } = useWorkModel()
-  // The owner's order covers kept areas only (the worker refuses anything else), all of them at once, as the rail shows them.
+  // The owner's order covers kept areas only (the worker refuses anything else), all of them at once, as the focus list shows them.
   const order = focusAreas.filter((entry) => entry.status === 'kept' && !entry.mergedInto).map((entry) => entry.id)
   const at = order.indexOf(area.id)
   const swap = (other: number) => { const next = [...order]; [next[at], next[other]] = [next[other], next[at]]; changes.apply({ action: 'reorder', focusAreaIds: next }) }
@@ -235,6 +236,7 @@ export function FocusHeader({ area, requests, changes }: { area: FocusArea; requ
               <SharedMark focusAreaId={area.id} onOpen={() => setSharing(true)} />
             </div>
             {area.goal ? <p className="text-[0.95rem] leading-snug">{area.goal}</p> : <p className="text-sm text-muted-foreground italic">{t('Write one sentence saying what this area is for (Edit goal).')}</p>}
+            <FocusNotes area={area} changes={changes} />
             {/* The area's own evidence sits with its goal, so it can't be read as belonging to the asks below. */}
             {area.quotes.length > 0 ? <WhyItsHere quotes={area.quotes} /> : area.evidence && <p className="text-xs text-muted-foreground">{interpolate(t('Why it’s here: {evidence}'), { evidence: area.evidence })}</p>}
           </div>

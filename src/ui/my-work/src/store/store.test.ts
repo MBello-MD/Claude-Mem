@@ -268,7 +268,7 @@ describe('usage counts', () => {
     const { store, usage } = testStore()
     store.getState().reportOpen()
     store.getState().reportOpen()
-    store.getState().setListView('list')
+    store.getState().setListView('agents')
     store.getState().reportOpen()
     assert.deepEqual(usage, [{ event: 'opened', view: 'work' }])
     store.getState().goToPage('rules')
@@ -339,29 +339,43 @@ describe('display preferences', () => {
   it('saves only how the person likes to see My Work, and reads it back next visit', () => {
     const storage = memoryStorage()
     const first = testStore({ storage }).store
-    first.getState().setListView('list')
+    first.getState().setListView('agents')
     first.getState().setFilter('closed')
     first.getState().setFocusArtwork('compact')
     first.getState().goToPage('rules')
     const saved = JSON.parse(storage.items.get('claude-mem:my-work:preferences')!)
-    assert.deepEqual(saved.state, { listView: 'list', filter: 'closed', sort: 'attention', focusArtwork: 'compact' })
+    assert.deepEqual(saved.state, { listView: 'agents', filter: 'closed', focusArtwork: 'compact' })
     const next = testStore({ storage }).store.getState().view
-    assert.deepEqual([next.listView, next.filter, next.focusArtwork, next.section], ['list', 'closed', 'compact', 'work'])
+    assert.deepEqual([next.listView, next.filter, next.focusArtwork, next.section], ['agents', 'closed', 'compact', 'work'])
+  })
+
+  it('keeps the Board view across a reload', () => {
+    const storage = memoryStorage()
+    testStore({ storage }).store.getState().setListView('board')
+    assert.equal(testStore({ storage }).store.getState().view.listView, 'board')
   })
 
   it('leaves unknown saved values at their defaults, drops the team view, and starts the theme from ?theme=', () => {
     const storage = memoryStorage({ 'claude-mem:my-work:preferences': JSON.stringify({ version: 1, state: { dark: false, listView: 'team', filter: 'mine', sort: 7, focusArtwork: 'animated' } }) })
     const view = testStore({ storage, href: 'http://localhost/?theme=dark' }).store.getState().view
-    assert.deepEqual([view.dark, view.listView, view.filter, view.sort, view.focusArtwork], [true, 'cards', 'all', 'attention', 'full'])
+    assert.deepEqual([view.dark, view.listView, view.filter, view.focusArtwork], [true, 'threads', 'all', 'full'])
   })
 
+  for (const retired of ['cards', 'list']) {
+    it(`reads a saved ${retired} view as the thread list`, () => {
+      const storage = memoryStorage({ 'claude-mem:my-work:preferences': JSON.stringify({ version: 1, state: { listView: retired, filter: 'working', sort: 'started' } }) })
+      const view = testStore({ storage }).store.getState().view
+      assert.deepEqual([view.listView, view.filter], ['threads', 'working'])
+    })
+  }
+
   it('keeps existing preferences when artwork density is absent and remembers turning artwork off', () => {
-    const storage = memoryStorage({ 'claude-mem:my-work:preferences': JSON.stringify({ version: 1, state: { listView: 'list', filter: 'working', sort: 'started' } }) })
+    const storage = memoryStorage({ 'claude-mem:my-work:preferences': JSON.stringify({ version: 1, state: { listView: 'agents', filter: 'working' } }) })
     const first = testStore({ storage }).store
-    assert.deepEqual([first.getState().view.listView, first.getState().view.focusArtwork], ['list', 'full'])
+    assert.deepEqual([first.getState().view.listView, first.getState().view.focusArtwork], ['agents', 'full'])
     first.getState().setFocusArtwork('off')
     const next = testStore({ storage }).store.getState().view
-    assert.deepEqual([next.listView, next.filter, next.sort, next.focusArtwork], ['list', 'working', 'started', 'off'])
+    assert.deepEqual([next.listView, next.filter, next.focusArtwork], ['agents', 'working', 'off'])
   })
 })
 
@@ -468,6 +482,27 @@ describe('My Focus saves', () => {
     } finally { stop() }
   })
 
+  it('refuses an old notes Undo after newer notes were saved elsewhere, and allows it after an unrelated rename', async () => {
+    const { store } = testStore()
+    const area = { ...LOCAL_MODEL.focusAreas[0], notes: 'Mine' }
+    const saved = { ...LOCAL_MODEL, focusAreas: [area] }
+    const sent: FocusChange[] = []
+    const { source, feed } = fakeSource({ saveFocusChange: async change => { sent.push(change); return saved } })
+    const stop = store.getState().startWorkSource(source)
+    try {
+      feed.onModel({ ...LOCAL_MODEL, focusAreas: [{ ...area, notes: 'Before' }] })
+      await store.getState().applyFocusChange({ action: 'edit-notes', focusAreaId: area.id, notes: 'Mine' }, {
+        text: 'Changed the notes', undo: [{ action: 'edit-notes', focusAreaId: area.id, notes: 'Before' }],
+      })
+      feed.onModel({ ...saved, focusAreas: [{ ...area, notes: 'Newer, from another tab' }] })
+      assert.equal(await store.getState().undoLastFocusChange(), false)
+      assert.deepEqual(sent.map(change => change.notes), ['Mine'])
+      feed.onModel({ ...saved, focusAreas: [{ ...area, name: 'Renamed in another tab' }] })
+      assert.equal(await store.getState().undoLastFocusChange(), true)
+      assert.deepEqual(sent.map(change => change.notes), ['Mine', 'Before'])
+    } finally { stop() }
+  })
+
   it('runs one change at a time, keeps it for Undo, and undoes it', async () => {
     const { store } = testStore()
     const area = LOCAL_MODEL.focusAreas[0]
@@ -543,3 +578,86 @@ describe('My Focus saves', () => {
     } finally { stop() }
   })
 })
+
+describe('one-click owner runs', () => {
+  const loaded = async (overrides: Partial<WorkDataSource>) => {
+    const { store } = testStore()
+    const { source, feed, reads } = fakeSource(overrides)
+    store.getState().startWorkSource(source)
+    reads[0].resolve(LOCAL_MODEL)
+    await settle()
+    return { store, feed }
+  }
+
+  it('sends each click once with a token of its own, and a double click sends one', async () => {
+    const sent: { requestId: string; text: string; token: string }[] = []
+    const start = deferred<{ outcome: 'started' }>()
+    const { store } = await loaded({ answerRequest: (requestId, text, token) => { sent.push({ requestId, text, token }); return start.promise } })
+    const first = store.getState().answerRequest('r5', 'Linear.')
+    assert.deepEqual(await store.getState().answerRequest('r5', 'Linear.'), { outcome: 'duplicate' })
+    start.resolve({ outcome: 'started' })
+    assert.deepEqual(await first, { outcome: 'started' })
+    await store.getState().answerRequest('r5', 'Linear, again.')
+    assert.equal(sent.length, 2)
+    assert.notEqual(sent[0].token, sent[1].token)
+    assert.match(sent[0].token, /^[A-Za-z0-9_-]{8,64}$/)
+  })
+
+  it('passes a refusal through for the fallback, and says so when the source cannot do it', async () => {
+    const { store } = await loaded({ answerRequest: async () => ({ outcome: 'refused', reason: 'Codex is not installed on this computer.' }) })
+    assert.deepEqual(await store.getState().answerRequest('r5', 'Linear.'), { outcome: 'refused', reason: 'Codex is not installed on this computer.' })
+    assert.equal((await store.getState().generateStage('r3', 'deck')).outcome, 'refused')
+  })
+
+  it('starts a stage and a plan through the source, and shows the model a saved automatic choice answered', async () => {
+    const calls: unknown[] = []
+    const { store } = await loaded({
+      generateStage: async (requestId, formatId, token) => { calls.push(['stage', requestId, formatId, typeof token]); return { outcome: 'started' } },
+      planFocus: async (focusAreaId, token) => { calls.push(['plan', focusAreaId, typeof token]); return { outcome: 'started' } },
+      setAutoStageFormat: async (formatId) => { calls.push(['auto', formatId]); return { ...LOCAL_MODEL, autoStageFormat: formatId } },
+    })
+    await store.getState().generateStage('r3', 'deck')
+    await store.getState().planFocus(null)
+    await store.getState().setAutoStageFormat('brief')
+    assert.deepEqual(calls, [['stage', 'r3', 'deck', 'string'], ['plan', null, 'string'], ['auto', 'brief']])
+    const load = store.getState().work.load
+    assert.equal(load.state === 'loaded' && load.model.autoStageFormat, 'brief')
+  })
+
+  it('reads a plan\'s proposals once when the model says it is ready, and drops them when it is not', async () => {
+    const plan = { state: 'ready' as const, focusAreaId: null, startedAt: 'a', generatedAt: 'b', error: null, skipped: [], proposals: [{ kind: 'goal' as const, focusAreaId: 'fa-viewer', goal: 'g', reason: 'r' }] }
+    let reads = 0
+    const { store, feed } = await loaded({ loadFocusPlan: async () => { reads++; return plan } })
+    const summary = { state: 'ready' as const, focusAreaId: null, startedAt: 'a', generatedAt: 'b', error: null, proposals: 1 }
+    feed.onModel({ ...LOCAL_MODEL, focusPlan: { ...summary, state: 'planning', generatedAt: null, proposals: 0 } })
+    await settle()
+    assert.equal(store.getState().work.focusPlan, null)
+    feed.onModel({ ...LOCAL_MODEL, focusPlan: summary })
+    feed.onModel({ ...withRequests(2), focusPlan: summary })
+    await settle()
+    assert.deepEqual(store.getState().work.focusPlan, plan)
+    assert.equal(reads, 1)
+    feed.onModel({ ...LOCAL_MODEL, focusPlan: { ...summary, state: 'failed', generatedAt: null, error: 'Claude Code: quota', proposals: 0 } })
+    await settle()
+    assert.equal(store.getState().work.focusPlan, null)
+  })
+
+  it('never shows a plan whose read finishes after the model has moved on to another plan', async () => {
+    const plan = (generatedAt: string, goal: string) => ({ state: 'ready' as const, focusAreaId: null, startedAt: 'a', generatedAt, error: null, skipped: [], proposals: [{ kind: 'goal' as const, focusAreaId: 'fa-viewer', goal, reason: 'r' }] })
+    const summary = { state: 'ready' as const, focusAreaId: null, startedAt: 'a', generatedAt: 'first', error: null, proposals: 1 }
+    const reads = [deferred<ReturnType<typeof plan>>(), deferred<ReturnType<typeof plan>>()]
+    let started = 0
+    const { store, feed } = await loaded({ loadFocusPlan: () => reads[started++].promise })
+    feed.onModel({ ...LOCAL_MODEL, focusPlan: summary })
+    feed.onModel({ ...LOCAL_MODEL, focusPlan: { ...summary, state: 'planning', generatedAt: null, proposals: 0 } })
+    reads[0].resolve(plan('first', 'old goal'))
+    await settle()
+    assert.equal(store.getState().work.focusPlan, null)
+
+    feed.onModel({ ...LOCAL_MODEL, focusPlan: { ...summary, generatedAt: 'second' } })
+    reads[1].resolve(plan('second', 'new goal'))
+    await settle()
+    assert.deepEqual(store.getState().work.focusPlan, plan('second', 'new goal'))
+  })
+})
+

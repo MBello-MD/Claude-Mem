@@ -60,6 +60,7 @@ import { findRecentDuplicateUserPrompt as findRecentDuplicateUserPromptRecord } 
 import { normalizeStoredPromptText, MEDIA_PROMPT_PLACEHOLDER } from './prompt-storage.js';
 import { stripMemoryTags } from '../../utils/tag-stripping.js';
 import { applySqliteConnectionPragmas, assertSchemaWriterCompatible, claimSchemaWriter, LATEST_SCHEMA_VERSION } from './connection.js';
+import type { WaitingFor } from '../work-view/waiting-for.mjs';
 import { streamRows } from './stream-rows.js';
 import { ensureMediaSchema } from './media.js';
 import { OBSERVATIONS_FTS_TRIGGERS_SQL, SESSION_SUMMARIES_FTS_TRIGGERS_SQL } from './SessionSearch.js';
@@ -335,7 +336,20 @@ export class SessionStore {
     this.ensureMergedIntoProjectCoveringIndexes();
     this.ensureNativePromptIdentity();
     this.ensureObservationFileIndex();
+    this.ensureSummaryWaitingForColumn();
     ensureMediaSchema(this.db);
+  }
+
+  /**
+   * What a turn's summary says the turn waits for (work-view/waiting-for.mjs). Local only: sync payloads name their
+   * columns and leave this one out. Runs after every rebuild of session_summaries, and takes no schema version, so
+   * a worker without it still opens the database.
+   */
+  private ensureSummaryWaitingForColumn(): void {
+    this.db.transaction(() => {
+      const columns = this.db.query('PRAGMA table_info(session_summaries)').all() as TableColumnInfo[];
+      if (!columns.some(existing => existing.name === 'waiting_for')) this.db.run('ALTER TABLE session_summaries ADD COLUMN waiting_for TEXT');
+    }).immediate();
   }
 
   /**
@@ -4302,6 +4316,7 @@ export class SessionStore {
       completed: string;
       next_steps: string;
       notes: string | null;
+      waiting_for?: WaitingFor | null;
       files_read?: string[];
       files_edited?: string[];
     },
@@ -4315,8 +4330,8 @@ export class SessionStore {
     const stmt = this.db.prepare(`
       INSERT INTO session_summaries
       (memory_session_id, project, request, investigated, learned, completed,
-       next_steps, files_read, files_edited, notes, prompt_number, discovery_tokens, created_at, created_at_epoch)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       next_steps, files_read, files_edited, notes, waiting_for, prompt_number, discovery_tokens, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -4330,6 +4345,7 @@ export class SessionStore {
       JSON.stringify(summary.files_read ?? []),
       JSON.stringify(summary.files_edited ?? []),
       summary.notes,
+      summary.waiting_for ?? null,
       promptNumber || null,
       discoveryTokens,
       timestampIso,
@@ -4366,6 +4382,7 @@ export class SessionStore {
       completed: string;
       next_steps: string;
       notes: string | null;
+      waiting_for?: WaitingFor | null;
       files_read?: string[];
       files_edited?: string[];
     } | null,
@@ -4585,7 +4602,7 @@ export class SessionStore {
           this.db.prepare(`
             UPDATE session_summaries SET
               request = ?, investigated = ?, learned = ?, completed = ?, next_steps = ?,
-              files_read = ?, files_edited = ?, notes = ?, discovery_tokens = ?,
+              files_read = ?, files_edited = ?, notes = ?, waiting_for = ?, discovery_tokens = ?,
               created_at = ?, created_at_epoch = ?,
               sync_rev = ?, synced_at = NULL
             WHERE id = ?
@@ -4598,6 +4615,8 @@ export class SessionStore {
             JSON.stringify(mergedFilesRead),
             JSON.stringify(mergedFilesEdited),
             mergedNotes,
+            // Like next_steps, what the turn waits for is as of this stop: the latest value wins, an unsaid one included.
+            summary.waiting_for ?? null,
             mergedTokens,
             timestampIso,
             timestampEpoch,
@@ -4620,8 +4639,8 @@ export class SessionStore {
           const summaryStmt = this.db.prepare(`
             INSERT INTO session_summaries
             (memory_session_id, project, request, investigated, learned, completed,
-             next_steps, files_read, files_edited, notes, prompt_number, discovery_tokens, created_at, created_at_epoch)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             next_steps, files_read, files_edited, notes, waiting_for, prompt_number, discovery_tokens, created_at, created_at_epoch)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
 
           const result = summaryStmt.run(
@@ -4635,6 +4654,7 @@ export class SessionStore {
             JSON.stringify(filesRead),
             JSON.stringify(filesEdited),
             summary.notes,
+            summary.waiting_for ?? null,
             promptNumber || null,
             discoveryTokens,
             timestampIso,

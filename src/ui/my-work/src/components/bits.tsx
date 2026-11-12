@@ -55,10 +55,7 @@ export const STATE_LABEL: Record<LiveState, string> = {
   working: 'Working', 'needs-check': 'Done, not checked', 'your-move': 'Your move', idle: 'Idle', shipped: 'Shipped',
 }
 
-/** Attention first: what waits on you, then what to check, then what is moving, then the rest. */
-export const ATTENTION_ORDER: LiveState[] = ['your-move', 'needs-check', 'working', 'idle', 'shipped']
-
-/** Each state's colors, shared by the badge and the List view's flipboard so both read as the same state. */
+/** Each state's colors. */
 export const STATE_SURFACE: Record<LiveState, string> = {
   working: 'border-working-border bg-working text-working-foreground',
   'needs-check': 'border-review-border bg-review text-review-foreground',
@@ -67,19 +64,22 @@ export const STATE_SURFACE: Record<LiveState, string> = {
   shipped: 'border-shipped-border bg-shipped text-shipped-foreground',
 }
 
+/** The state's dot, shared by the badge and the thread list. */
+export const STATE_DOT: Record<LiveState, string> = {
+  working: 'bg-working-foreground motion-safe:animate-pulse',
+  'needs-check': 'bg-review-foreground',
+  'your-move': 'bg-attention-foreground',
+  idle: 'bg-idle-foreground',
+  shipped: 'bg-shipped-foreground',
+}
+
 /** One glance tells working, done-but-unchecked, waiting on you and shipped apart (§6). State is the only thing colored. */
 export function StateBadge({ state }: { state: LiveState }) {
   const { t } = useI18n()
   return (
     <Req ids={['R6.2']}>
       <Badge variant="outline" className={cn('shrink-0 gap-1.5 font-normal', STATE_SURFACE[state])}>
-        <span className={cn('size-1.5 rounded-full', {
-          'bg-working-foreground motion-safe:animate-pulse': state === 'working',
-          'bg-review-foreground': state === 'needs-check',
-          'bg-attention-foreground': state === 'your-move',
-          'bg-idle-foreground': state === 'idle',
-          'bg-shipped-foreground': state === 'shipped',
-        })} />
+        <span className={cn('size-1.5 rounded-full', STATE_DOT[state])} />
         {t(STATE_LABEL[state])}
       </Badge>
     </Req>

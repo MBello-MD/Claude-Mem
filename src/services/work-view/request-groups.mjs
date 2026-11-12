@@ -31,6 +31,9 @@ import { NO_PROJECT, projectRoot, upgradedGroupRoot, withDerivedProjects } from 
 import { isOwnerDismissedArea, isPlaceableArea, OTHER_FOCUS_AREA_ID, PROPOSAL_KINDS, readFocus } from './my-focus.mjs';
 import { beforeSharedFileWrite } from './shared-file-hooks.mjs';
 import { isClosedWorkStateStatus } from './work-state-status.mjs';
+import { RISK_LEVELS } from './risk-levels.mjs';
+import { QUESTION_NEEDS } from './question-needs.mjs';
+import { OWNER_RUNS_FILE } from './owner-runs.mjs';
 import { writeJsonFileAtomic } from '../../shared/atomic-json.js';
 
 const DATA_DIR = process.env.CLAUDE_MEM_DATA_DIR || join(homedir(), '.claude-mem');
@@ -412,11 +415,22 @@ export function validateProgress(entry, knownGroups, options = {}) {
   if (entry.state === 'shipped' && (entry.percent !== 100 || !entry.shippedAt)) throw new TypeError('A shipped request needs percent 100 and shippedAt.');
   if (entry.state !== 'shipped' && entry.shippedAt) throw new TypeError('Only a shipped request has shippedAt.');
   const milestones = reviewList(entry.milestones, 12, 'milestones', options), preferences = reviewList(entry.preferences, 10, 'preferences', options);
+  const risk = entry.risk ?? null;
+  const question = entry.question ?? null, background = question ? reviewList(question.background, 4, 'question.background', options) : [];
+  if (risk && !RISK_LEVELS.includes(risk.level)) throw new TypeError(`risk.level must be one of ${RISK_LEVELS.join(', ')}.`);
+  if (question && !QUESTION_NEEDS.includes(question.need)) throw new TypeError(`question.need must be one of ${QUESTION_NEEDS.join(', ')}.`);
   return {
     groupId: entry.groupId, state: entry.state, percent: entry.percent,
     startedAt: entry.startedAt ?? null, shippedAt: entry.shippedAt ?? null, lastActivityAt: entry.lastActivityAt ?? null,
     summary: text(entry.summary, 280, 'summary'),
     narrative: text(entry.narrative, 1200, 'narrative', true),
+    ...(risk ? { risk: { level: risk.level, reason: text(risk.reason, 200, 'risk.reason') } } : {}),
+    // One phrase each for My Work's columns: what happens next, and why the request matters to the owner.
+    ...(entry.nextStep ? { nextStep: text(entry.nextStep, 60, 'nextStep') } : {}),
+    ...(entry.why ? { why: text(entry.why, 60, 'why') } : {}),
+    // What the agent is waiting on the owner for. A current review with a question is what makes My Work say the
+    // request needs the owner; `need` says whether that is an answer or an approval.
+    ...(question ? { question: { need: question.need, text: text(question.text, 200, 'question.text'), background: background.map((item, index) => ({ text: text(item.text, 200, `question.background[${index}].text`), evidence: evidenceList(item.evidence, 6) })) } } : {}),
     milestones: milestones.map((milestone, index) => {
       if (!isIsoOrNull(milestone.at ?? null)) throw new TypeError(`milestones[${index}].at must be an ISO date or null.`);
       return { at: milestone.at ?? null, text: text(milestone.text, 200, `milestones[${index}].text`), evidence: evidenceList(milestone.evidence, 6) };
@@ -429,6 +443,7 @@ export function validateProgress(entry, knownGroups, options = {}) {
     outcome: validateOutcome(entry.outcome, options),
     evidence: evidenceList(entry.evidence, 20),
     // What the reviewer actually saw: later activity or membership changes make it due again.
+    format: REVIEW_FORMAT,
     reviewedThrough: new Date(Date.parse(basis.checkedThrough)).toISOString(),
     reviewedConversations: [...new Set(basis.conversations)].sort(),
     ...(options.coerce && options.coercedFields.size ? { coercedFields: [...options.coercedFields].sort() } : {}),
@@ -450,9 +465,17 @@ export function appendReading(previous, reading) {
   return [...byAt.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).slice(-MAX_READINGS);
 }
 
-/** A review is current only for the membership it covered and the activity it saw. */
+/**
+ * What a review is asked to record, as a number that goes up when the reviewer is asked for something a row shows
+ * (2: risk, a one-phrase next step, why the request matters, the open question). A review written to an older
+ * format is due once more, in full, so every row gets the new fields; after that only new activity makes it due.
+ */
+export const REVIEW_FORMAT = 2;
+
+/** A review is current only for the membership it covered, the activity it saw, and the format it was asked for. */
 export function reviewIsCurrent(review, conversationKeys, lastActivityEpoch) {
   if (!review?.reviewedThrough || !Array.isArray(review.reviewedConversations)) return false;
+  if ((review.format ?? 1) < REVIEW_FORMAT) return false;
   const current = [...new Set(conversationKeys)].sort();
   if (current.length !== review.reviewedConversations.length || current.some((key, index) => key !== review.reviewedConversations[index])) return false;
   return Date.parse(review.reviewedThrough) >= lastActivityEpoch;
@@ -580,12 +603,14 @@ export function readLedger(dir = LEDGER_DIR) {
   return {
     groups, progress, story: readJson(join(dir, 'story.json'), null), refresh: readJson(join(dir, 'refresh.json'), null),
     agentWrittenPromptIds: new Set(readJson(join(dir, AGENT_WRITTEN_PROMPTS_FILE), { promptIds: [] }).promptIds ?? []),
+    // The runs the owner started from My Work (owner-run-store.ts): answers, stages and the focus plan.
+    ownerRuns: readJson(join(dir, OWNER_RUNS_FILE), null),
   };
 }
 
 /** Cheap change detector for the monitor's one-second poll. */
 export function ledgerSignature(dir = LEDGER_DIR) {
-  return ['request-groups.json', 'progress', 'story.json', 'refresh.json'].map((name) => {
+  return ['request-groups.json', 'progress', 'story.json', 'refresh.json', OWNER_RUNS_FILE].map((name) => {
     try { const stat = statSync(join(dir, name)); return `${stat.mtimeMs}:${stat.size}`; }
     catch { return 'missing'; }
   }).join('|');
@@ -698,7 +723,16 @@ const otherPassHash = (ledger, groupIds) => groupIds.length
   ? createHash('sha256').update(JSON.stringify(groupIds.map((groupId) => [ledger.groups.groups[groupId].anchor, focusBasis(ledger, groupId)]).sort())).digest('hex').slice(0, 16)
   : null;
 
-const focusAreaRecord = (area) => ({ focusAreaId: area.focusAreaId, name: area.name, goal: area.goal, about: area.about, status: area.status });
+// The owner's notes ride along as context for the router; an area without notes carries no key.
+/** The live area a group's anchor is placed in (the owner's placement first), as the reviewer reads it. */
+function placedFocusArea(focus, anchor) {
+  const placement = focus.placementsByAnchor.get(anchor);
+  const id = focus.resolveFocusAreaId(placement?.owner?.focusAreaId) || focus.resolveFocusAreaId(placement?.router?.focusAreaId);
+  const area = id && focus.focusAreas.find((entry) => entry.focusAreaId === id);
+  return area ? { name: area.name, goal: area.goal, ...(area.notes ? { notes: area.notes } : {}) } : null;
+}
+
+const focusAreaRecord = (area) => ({ focusAreaId: area.focusAreaId, name: area.name, goal: area.goal, about: area.about, status: area.status, ...(area.notes ? { notes: area.notes } : {}) });
 
 /** focus-input: the areas a request may go in, the dismissed areas never to propose again, and one batch of requests to
  * place, earliest in the ledger first. `remaining` counts the requests left for later batches. */
@@ -1012,8 +1046,10 @@ export function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now
           observations: observations.all(platform, sessionId, since).map((row) => ({ id: row.id, at: iso(row.created_at_epoch), type: row.type, title: row.title, subtitle: row.subtitle })),
         };
       });
+      // The area the request sits in, with the owner's goal and notes for it: what `why` ties the request to.
+      const focusArea = localDeviceId ? placedFocusArea(readFocus(db(), { localDeviceId }), ledger.groups.groups[args[0]].anchor) : null;
       // The reviewer passes reviewBasis back to record-progress unchanged.
-      return print({ ...details, conversations, mode: amendSince ? 'amend' : 'full', amendSince, reviewBasis: { checkedThrough: iso(now), conversations: keys.sort() } });
+      return print({ ...details, ...(focusArea ? { focusArea } : {}), conversations, mode: amendSince ? 'amend' : 'full', amendSince, reviewBasis: { checkedThrough: iso(now), conversations: keys.sort() } });
     }
     const { due, ungrouped } = pendingReviews(ledger, db(), since());
     const limit = option(args, 'limit', 48);
