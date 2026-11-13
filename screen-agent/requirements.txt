@@ -1,0 +1,5 @@
+anthropic>=2.8.0
+playwright>=1.50
+pillow>=10
+mss>=9 ; sys_platform == "win32"
+pyautogui>=0.9.54 ; sys_platform == "win32"
